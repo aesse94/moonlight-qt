@@ -107,6 +107,13 @@ int Session::getAudioRendererCapabilities(int audioConfiguration)
     caps |= CAPABILITY_SLOW_OPUS_DECODER;
 #endif
 
+    // FrogtaleTV patch: a Steam Deck at a 3-4 W TDP spends ~25% of Moonlight's CPU on audio,
+    // mostly waking up for 5 ms Opus packets. FROGTALE_SLOW_OPUS=1 asks for 10 ms packets
+    // (half the decodes and wakeups, +5 ms audio latency).
+    if (qEnvironmentVariableIntValue("FROGTALE_SLOW_OPUS")) {
+        caps |= CAPABILITY_SLOW_OPUS_DECODER;
+    }
+
     return caps;
 }
 

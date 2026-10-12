@@ -1,0 +1,214 @@
+{
+    "app-id": "com.frogtale.MoonlightStarlink",
+    "runtime": "org.kde.Platform",
+    "runtime-version": "6.11",
+    "sdk": "org.kde.Sdk",
+    "command": "moonlight",
+    "rename-icon": "moonlight",
+    "finish-args": [
+        "--share=network",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--share=ipc",
+        "--socket=pulseaudio",
+        "--device=all",
+        "--talk-name=org.freedesktop.ScreenSaver",
+        "--env=QT_QUICK_CONTROLS_STYLE=Material",
+        "--env=QML_DISABLE_DISK_CACHE=1",
+        "--env=LIBVA_DRIVER_NAME=",
+        "--unset-env=LIBVA_DRIVER_NAME",
+        "--env=LIBVA_DRIVERS_PATH=",
+        "--unset-env=LIBVA_DRIVERS_PATH",
+        "--filesystem=xdg-run/gamescope-0",
+        "--filesystem=host-os:ro"
+    ],
+    "cleanup": [
+        "/include",
+        "*.a",
+        "/share/ffmpeg"
+    ],
+    "modules": [
+        {
+            "name": "libplacebo",
+            "buildsystem": "meson",
+            "build-options": {
+                "config-opts": [
+                    "-Ddemos=false",
+                    "-Dvulkan=enabled",
+                    "-Dopengl=disabled",
+                    "-Dshaderc=enabled"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/haasn/libplacebo.git",
+                    "commit": "92b5ac6db79f4d680eb656692f7bf51e9606f42a"
+                },
+                {
+                    "type": "patch",
+                    "path": "libplacebo-disable-internally-synchronized-queues.patch"
+                }
+            ],
+            "cleanup": [
+                "/include",
+                "/lib/pkgconfig"
+            ]
+        },
+        {
+            "name": "SDL3",
+            "buildsystem": "cmake-ninja",
+            "builddir": true,
+            "build-options": {
+                "config-opts": [
+                    "-DSDL_ALSA=OFF",
+                    "-DSDL_RPATH=OFF",
+                    "-DSDL_KMSDRM=OFF",
+                    "-DSDL_INSTALL_DOCS=OFF",
+                    "-DSDL_TEST_LIBRARY=OFF",
+                    "-DCMAKE_INTERPROCEDURAL_OPTIMIZATION=ON"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/libsdl-org/SDL.git",
+                    "tag": "release-3.4.18",
+                    "commit": "829a65d769d935c4852f8159e964312c0957260a"
+                }
+            ]
+        },
+        {
+            "name": "SDL2-compat",
+            "buildsystem": "cmake-ninja",
+            "builddir": true,
+            "build-options": {
+                "config-opts": [
+                    "-DSDL2COMPAT_TESTS=OFF"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/libsdl-org/sdl2-compat.git",
+                    "tag": "release-2.32.74",
+                    "commit": "e4df8a55f20da762290a78c2bbe8f8d89d01486a"
+                }
+            ]
+        },
+        {
+            "name": "SDL2_ttf",
+            "buildsystem": "cmake-ninja",
+            "builddir": true,
+            "build-options": {
+                "config-opts": [
+                    "-DSDL2TTF_VENDORED=ON",
+                    "-DSDL2TTF_SAMPLES=OFF"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/libsdl-org/SDL_ttf.git",
+                    "//": "branch: SDL2",
+                    "commit": "a883e490e30fb44a5336ea3dcb990c6982c5216f"
+                }
+            ]
+        },
+        {
+            "name": "dav1d",
+            "buildsystem": "meson",
+            "config-opts": [
+                "-Denable_tools=false",
+                "-Denable_tests=false"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://code.videolan.org/videolan/dav1d.git",
+                    "tag": "1.5.4",
+                    "commit": "54706fc6bc0cdecab7e9593974a4039cc038fca7"
+                }
+            ]
+        },
+        {
+            "name": "ffmpeg",
+            "build-options": {
+                "config-opts": [
+                    "--fatal-warnings",
+                    "--disable-stripping",
+                    "--enable-pic",
+                    "--enable-lto",
+                    "--enable-shared",
+                    "--disable-static",
+                    "--disable-all",
+                    "--enable-avcodec",
+                    "--enable-avformat",
+                    "--enable-swscale",
+                    "--enable-decoder=h264",
+                    "--enable-decoder=hevc",
+                    "--enable-decoder=av1",
+                    "--enable-hwaccel=h264_vaapi",
+                    "--enable-hwaccel=hevc_vaapi",
+                    "--enable-hwaccel=av1_vaapi",
+                    "--enable-hwaccel=h264_vdpau",
+                    "--enable-hwaccel=hevc_vdpau",
+                    "--enable-hwaccel=av1_vdpau",
+                    "--enable-libdrm",
+                    "--enable-hwaccel=h264_vulkan",
+                    "--enable-hwaccel=hevc_vulkan",
+                    "--enable-hwaccel=av1_vulkan",
+                    "--enable-decoder=h264_v4l2m2m",
+                    "--enable-decoder=hevc_v4l2m2m",
+                    "--enable-libdav1d",
+                    "--enable-decoder=libdav1d",
+                    "--enable-v4l2-request",
+                    "--enable-hwaccel=h264_v4l2request",
+                    "--enable-hwaccel=hevc_v4l2request",
+                    "--enable-hwaccel=av1_v4l2request"
+                ]
+            },
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/cgutman/FFmpeg.git",
+                    "//": "branch: moonlight_9.0.2_r1",
+                    "commit": "00899bea7fbfd93bca9eea399dcb9c7f2b78f938"
+                }
+            ]
+        },
+        {
+            "name": "gamescope-wsi",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -Dm755 VkLayer_FROG_gamescope_wsi.x86_64.json /app/share/vulkan/implicit_layer.d/VkLayer_FROG_gamescope_wsi.x86_64.json"
+            ],
+            "only-arches": [
+                "x86_64"
+            ],
+            "sources": [
+                {
+                    "type": "file",
+                    "path": "VkLayer_FROG_gamescope_wsi.x86_64.json"
+                }
+            ]
+        },
+        {
+            "name": "moonlight",
+            "buildsystem": "qmake",
+            "config-opts": [
+                "QMAKE_RPATHDIR=/app/lib"
+            ],
+            "sources": [
+                {
+                    "type": "git",
+                    "url": "https://github.com/aesse94/moonlight-qt.git",
+                    "branch": "frogtale-starlink"
+                }
+            ]
+        }
+    ],
+    "rename-desktop-file": "com.moonlight_stream.Moonlight.desktop",
+    "rename-appdata-file": "com.moonlight_stream.Moonlight.appdata.xml",
+    "desktop-file-name-suffix": " (Starlink)"
+}

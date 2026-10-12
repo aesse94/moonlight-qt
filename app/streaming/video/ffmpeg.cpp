@@ -1329,14 +1329,32 @@ bool FFmpegVideoDecoder::tryInitializeRendererForUnknownDecoder(const AVCodec* d
     decoder_pix_fmts = decoder->pix_fmts;
 #endif
 
+    // FrogtaleTV patch: FROGTALE_VULKAN_DECODE=1 tries Vulkan Video before the other hwaccels.
+    // FFmpeg lists VAAPI first, so HDR on a Steam Deck otherwise decodes with VAAPI and imports
+    // every frame into the Vulkan renderer as DRM_PRIME; decoding straight into Vulkan (as
+    // GeForce Now does) skips that per-frame import.
+    bool preferVulkanDecode = qEnvironmentVariableIntValue("FROGTALE_VULKAN_DECODE");
+
     // This might be a hwaccel decoder, so try any hw configs first
     if (tryHwAccel) {
         for (int pass = 0; pass <= MAX_DECODER_PASS; pass++) {
-            for (int i = 0;; i++) {
+            for (int i = 0, vulkanPass = preferVulkanDecode ? 1 : 0;; i++) {
                 const AVCodecHWConfig *config = avcodec_get_hw_config(decoder, i);
                 if (!config) {
+                    if (vulkanPass == 1) {
+                        // Vulkan was tried first; now try everything else in FFmpeg's order
+                        vulkanPass = 2;
+                        i = -1;
+                        continue;
+                    }
+
                     // No remaining hwaccel options
                     break;
+                }
+
+                if ((vulkanPass == 1 && config->device_type != AV_HWDEVICE_TYPE_VULKAN) ||
+                        (vulkanPass == 2 && config->device_type == AV_HWDEVICE_TYPE_VULKAN)) {
+                    continue;
                 }
 
                 // Initialize the hardware codec and submit a test frame if the renderer needs it
@@ -1345,7 +1363,8 @@ bool FFmpegVideoDecoder::tryInitializeRendererForUnknownDecoder(const AVCodec* d
                                           [config, params, pass]() -> IFFmpegRenderer* { return createHwAccelRenderer(config, params, pass); })) {
                     return true;
                 }
-                else if (failureReason == IFFmpegRenderer::InitFailureReason::NoHardwareSupport) {
+                else if (failureReason == IFFmpegRenderer::InitFailureReason::NoHardwareSupport && vulkanPass != 1) {
+                    // A failed preferred-Vulkan attempt must still fall back to the other hwaccels
                     SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
                                 "Skipping remaining hwaccels due lack of hardware support for specified codec");
                     return false;
