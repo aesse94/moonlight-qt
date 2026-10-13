@@ -17,12 +17,14 @@ not help: raising the host's FEC (whole frames are lost) and waiting for the pac
 | NACK lost video packets: every forward jump in RTP sequence numbers is sent to the host as `FTNK` + ranges | `moonlight-common-c/src/VideoStream.c` | `FROGTALE_NACK=1` |
 | Re-NACK whatever is still missing, 2 × 35 ms | same | `FROGTALE_NACK_RETRY_MS` |
 | Hold packets of later frames while the current FEC block is incomplete, so resends (and the host's handoff copies) can finish it. 100 ms with NACK. After a timeout, no holding for 1 s | same | `FROGTALE_REORDER_MS` (0 = stock) |
+| Report queueing delay to the host every 250 ms (`FTDL`), so Apollo steps the bitrate down when the link starts queueing, before packets are lost (needs `frogtale_adaptive_bitrate = 1` on the host) | same | on with NACK; `FROGTALE_DELAY=0` turns it off |
 | Poll the video socket every 10 ms while holding, so holds can't overrun during a stall | same | — |
 | Try Vulkan Video decoding before VAAPI (decoded frames stay in Vulkan; no per-frame DRM_PRIME import) | `app/streaming/video/ffmpeg.cpp` | `FROGTALE_VULKAN_DECODE=1`, plus `RADV_PERFTEST=video_decode` on Mesa 26.2 RADV |
 | Request 10 ms Opus packets (fewer audio wakeups at low TDP) | `app/streaming/audio/audio.cpp` | `FROGTALE_SLOW_OPUS=1` |
 | Write the log to a file on Linux (Game Mode discards stdout) | `app/main.cpp` | — (`/tmp/Moonlight-*.log` inside the sandbox) |
 
 Hold events go to `$XDG_CACHE_HOME/frogtale-reorder.log` as `epoch_ms outcome held_ms packets frame`.
+Delay reports of 15 ms or more are logged there as `epoch_ms delay queue_ms samples`.
 
 ## Results (Steam Deck OLED, Starlink, 90 fps HDR, 12 Mbps, 4 W)
 | | stutter events | median handoff pause |

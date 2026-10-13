@@ -1,0 +1,201 @@
+From d0ffeea2d04d7c212b901cd4c1d43bab62df5e49 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 13 Oct 2026 19:57:20 +0000
+Subject: [PATCH] Step the bitrate down on reported queueing delay
+
+A patched client reports its queueing delay every 250 ms (FTDL). Two
+reports in a row at or over frogtale_delay_ms (default 30) outside
+handoff windows step down 15%, or 40% at 4x the threshold, at most once
+a second. Climbing now also needs the queue under half the threshold,
+so it stops where the link starts queueing instead of where it drops.
+Like GeForce Now, this backs off before the queue overflows into loss.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01MoWnCbHthvS5ddBE52YXAc
+---
+ FROGTALE.md    |  7 +++++
+ src/config.cpp |  2 ++
+ src/config.h   |  4 +++
+ src/stream.cpp | 77 ++++++++++++++++++++++++++++++++++++++++++++++----
+ 4 files changed, 84 insertions(+), 6 deletions(-)
+
+diff --git a/FROGTALE.md b/FROGTALE.md
+index 94b51b4..a4d6d44 100644
+--- a/FROGTALE.md
++++ b/FROGTALE.md
+@@ -16,6 +16,13 @@ no change in behaviour.
+   a round trip for a NACK. The cost is about 20% extra video bandwidth, all inside those windows. This
+   relies on an accurate host clock: Windows' default sync interval is several hours, so a shorter
+   `SpecialPollInterval` is recommended.
++- **Delay-based step-down (`frogtale_delay_ms`, default 30, needs `frogtale_adaptive_bitrate = 1`):**
++  a patched client sends `"FTDL"`, `uint16 queue_ms`, `uint16 samples` (little endian) every 250 ms:
++  the median one-way delay of new frames over its 6 s minimum, i.e. how much queue is building on
++  the path. Two reports in a row at or over the threshold, outside handoff windows, step the bitrate
++  down 15% (40% at 4x the threshold), at most once a second. Climbing only counts a second as clean
++  when the queue also stayed under half the threshold. This is how GeForce Now (WebRTC) backs off
++  when something else fills the link, before the queue overflows into loss. `0` = loss only.
+ - **Build fixes for current MSYS2 (GCC 16, mingw-w64 v12+):** a `boost/endian/conversion.hpp`
+   include, and the synthetic pointer API declared only for older headers.
+ 
+diff --git a/src/config.cpp b/src/config.cpp
+index 994dba7..3a94eb8 100644
+--- a/src/config.cpp
++++ b/src/config.cpp
+@@ -539,6 +539,7 @@ namespace config {
+ 
+     0,  // frogtale_pacing_groups
+     0,  // frogtale_adaptive_bitrate
++    30,  // frogtale_delay_ms
+   };
+ 
+   nvhttp_t nvhttp {
+@@ -1248,6 +1249,7 @@ namespace config {
+     int_between_f(vars, "fec_percentage", stream.fec_percentage, {1, 255});
+     int_between_f(vars, "frogtale_pacing_groups", stream.frogtale_pacing_groups, {0, 16});
+     int_between_f(vars, "frogtale_adaptive_bitrate", stream.frogtale_adaptive_bitrate, {0, 1});
++    int_between_f(vars, "frogtale_delay_ms", stream.frogtale_delay_ms, {0, 1000});
+ 
+     map_int_int_f(vars, "keybindings"s, input.keybindings);
+ 
+diff --git a/src/config.h b/src/config.h
+index 0548baf..ef6a6c6 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -180,6 +180,10 @@ namespace config {
+ 
+     // FrogtaleTV patch: lower the bitrate during lossy patches reported by NACKs (0 = off)
+     int frogtale_adaptive_bitrate;
++
++    // FrogtaleTV patch: with adaptive bitrate, also step down when a patched client reports this much
++    // queueing delay in ms ("FTDL"), before the queue overflows into loss (0 = loss only)
++    int frogtale_delay_ms;
+   };
+ 
+   struct nvhttp_t {
+diff --git a/src/stream.cpp b/src/stream.cpp
+index 894df2a..db9eea9 100644
+--- a/src/stream.cpp
++++ b/src/stream.cpp
+@@ -298,6 +298,12 @@ namespace stream {
+       uint64_t last_sent = 0;
+       uint64_t last_nacked = 0;
+       std::chrono::steady_clock::time_point last_eval;
++
++      // Delay-based step-down (frogtale_delay_ms): queueing delay reported by the client ("FTDL")
++      uint64_t delay_reports = 0;
++      int delay_over_streak = 0;
++      int delay_max_ms = 0;  // highest report since the last evaluation, to gate climbing
++      std::chrono::steady_clock::time_point last_delay_step;
+     };
+ 
+     // Starlink reconfigures its links every 15 s at :12/:27/:42/:57 past the minute (UTC), and
+@@ -494,6 +500,14 @@ namespace stream {
+       platf::send(send_info);
+     }
+ 
++    void set_bitrate(history_t &history, int target, const char *reason, double value) {
++      if (std::abs(target - history.current_kbps) * 20 >= history.current_kbps) {
++        history.bitrate_events->raise(target);
++        BOOST_LOG(info) << "FrogtaleTV ABR: "sv << reason << ' ' << value << " -> "sv << target << " kbps (base "sv << history.base_kbps << ")"sv;
++        history.current_kbps = target;
++      }
++    }
++
+     // GeForce Now steps its bitrate down on loss (bwe.packetLossHighThresholdx100 100 = 1%,
+     // packetLossLowThresholdx100 20 = 0.2%, lossyFrameStepDownRatio 50). Handoff windows are excluded:
+     // their loss is expected and the copies cover it. Runs once a second per client.
+@@ -514,6 +528,8 @@ namespace stream {
+       }
+ 
+       double loss = (double) nacked / (double) sent;
++      int delay_max_ms = history.delay_max_ms;
++      history.delay_max_ms = 0;
+       int target = history.current_kbps;
+       // A Starlink storm on 2026-10-13 12:37 lost 12-42% of packets for ~30 s; at the old 50% floor
+       // (6.7 Mbps) that still stuttered constantly. GeForce Now's floor is 1 Mbps
+@@ -524,8 +540,10 @@ namespace stream {
+       } else if (loss > 0.01) {
+         target = std::max(history.base_kbps / 4, history.current_kbps * 7 / 10);
+         history.clean_seconds = 0;
+-      } else if (loss < 0.002) {
+-        // 8 clean seconds per step (was 5): the climb bounced down and up 120 times in one session
++      } else if (loss < 0.002 && (!history.delay_reports || !config::stream.frogtale_delay_ms || delay_max_ms < config::stream.frogtale_delay_ms / 2)) {
++        // 8 clean seconds per step (was 5): the climb bounced down and up 120 times in one session.
++        // With delay reports, a second only counts as clean if the queue also stayed under half the
++        // threshold, so the climb stops where the link starts queueing instead of where it drops.
+         if (++history.clean_seconds >= 8 && history.current_kbps < history.base_kbps) {
+           target = std::min(history.base_kbps, std::max(history.current_kbps * 11 / 10, history.current_kbps + 500));
+           history.clean_seconds = 0;
+@@ -534,11 +552,52 @@ namespace stream {
+         history.clean_seconds = 0;
+       }
+ 
+-      if (std::abs(target - history.current_kbps) * 20 >= history.current_kbps) {
+-        history.bitrate_events->raise(target);
+-        BOOST_LOG(info) << "FrogtaleTV ABR: loss "sv << (int) (loss * 1000) / 10.0 << "% -> "sv << target << " kbps (base "sv << history.base_kbps << ")"sv;
+-        history.current_kbps = target;
++      set_bitrate(history, target, "loss %", (int) (loss * 1000) / 10.0);
++    }
++
++    // GeForce Now (WebRTC) backs off as soon as one-way delay climbs, i.e. a queue is building
++    // somewhere on the path, instead of waiting for that queue to overflow. On 2026-10-13 a movie
++    // on the same Starlink pushed loss to 13-42% before the loss-based step-down could react.
++    // The client reports the median queueing delay over each 250 ms ("FTDL"). Two reports in a
++    // row over frogtale_delay_ms step down 15% (WebRTC's 0.85), or 40% when the queue is over
++    // 4x that; at most one step per second so the encoder change can show. Reports inside
++    // handoff windows are ignored: a satellite switch changes the path delay itself.
++    void handle_delay(const udp::endpoint &peer, const char *payload, std::size_t bytes) {
++      auto history = find(peer);
++      if (!history || bytes < 4) {
++        return;
+       }
++      uint16_t queue_ms;
++      std::memcpy(&queue_ms, payload, sizeof(queue_ms));
++      queue_ms = boost::endian::little_to_native(queue_ms);
++
++      bool off_window = !in_handoff_window();
++      auto now = std::chrono::steady_clock::now();
++
++      std::lock_guard lg {history->mutex};
++      history->delay_reports++;
++      if (!off_window) {
++        history->delay_over_streak = 0;
++        return;
++      }
++      history->delay_max_ms = std::max<int>(history->delay_max_ms, queue_ms);
++
++      int threshold = config::stream.frogtale_delay_ms;
++      if (!config::stream.frogtale_adaptive_bitrate || !threshold || !history->bitrate_events || !history->base_kbps) {
++        return;
++      }
++      if (queue_ms < threshold) {
++        history->delay_over_streak = 0;
++        return;
++      }
++      if (++history->delay_over_streak < 2 || now - history->last_delay_step < std::chrono::seconds(1)) {
++        return;
++      }
++      history->delay_over_streak = 0;
++      history->last_delay_step = now;
++      history->clean_seconds = 0;
++      int target = queue_ms >= threshold * 4 ? history->current_kbps * 6 / 10 : history->current_kbps * 85 / 100;
++      set_bitrate(*history, std::max(history->base_kbps / 4, target), "queue ms", queue_ms);
+     }
+ 
+     // Sends due duplicates for every client. One thread for the process, started on first use.
+@@ -1694,6 +1753,12 @@ namespace stream {
+           return;
+         }
+ 
++        if (buf_elem == 0 && bytes >= 8 && std::memcmp(buf[buf_elem].data(), "FTDL", 4) == 0) {
++          // FrogtaleTV patch: queueing delay report from a patched client
++          nack::handle_delay(peer, buf[buf_elem].data() + 4, bytes - 4);
++          return;
++        }
++
+         if (bytes == 4) {
+           // For legacy PING packets, find the matching session by address.
+           auto it = peer_to_session.find(peer.address());
+-- 
+2.43.0
+
