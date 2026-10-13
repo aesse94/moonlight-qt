@@ -63,6 +63,10 @@
 #elif !defined(QT_DEBUG) && defined(Q_OS_DARWIN)
 // Log to file for release Mac builds
 #define LOG_TO_FILE
+#elif defined(Q_OS_LINUX)
+// FrogtaleTV patch: Steam launches this from Game Mode, where stdout goes nowhere, so the
+// decoder selection and frame-loss logs we need for Starlink testing are lost. Log to file.
+#define LOG_TO_FILE
 #else
 // Log to console for debug Mac builds
 #endif
