@@ -1,0 +1,58 @@
+name: Frogtale Flatpak
+
+# Builds the Starlink Flatpak (com.frogtale.MoonlightStarlink) from this checkout, so a branch can be
+# tried on the Steam Deck without a local build: download the artifact, then
+# `flatpak install --user MoonlightStarlink.flatpak`.
+
+on:
+  push:
+    branches:
+      - frogtale-starlink
+      - 'claude/**'
+  workflow_dispatch:
+
+jobs:
+  flatpak:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install flatpak and org.flatpak.Builder
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak jq
+          # Ubuntu 24.04 blocks the unprivileged user namespaces bubblewrap needs
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          # Ubuntu's flatpak-builder installs cmake and meson modules into /app/lib64 (see FROGTALE.md)
+          flatpak install --user -y --noninteractive flathub org.flatpak.Builder
+          runtime=$(jq -r '."runtime-version"' flatpak/com.frogtale.MoonlightStarlink.json)
+          flatpak install --user -y --noninteractive flathub org.kde.Platform//$runtime org.kde.Sdk//$runtime
+
+      - name: Restore the dependency build cache
+        uses: actions/cache@v4
+        with:
+          path: ~/fpb-state
+          key: fpb-${{ hashFiles('flatpak/**') }}-${{ github.sha }}
+          restore-keys: |
+            fpb-${{ hashFiles('flatpak/**') }}-
+
+      - name: Build
+        run: |
+          cd flatpak
+          # Build this checkout (with its submodules) instead of the branch the manifest names
+          jq '(.modules[] | select(.name == "moonlight") | .sources) = [{"type": "dir", "path": ".."}]' \
+            com.frogtale.MoonlightStarlink.json > ci.json
+          flatpak run --filesystem=$HOME org.flatpak.Builder --state-dir=$HOME/fpb-state --force-clean \
+            --disable-rofiles-fuse --repo=$HOME/mlrepo $HOME/mlbuilddir ci.json
+          flatpak build-bundle $HOME/mlrepo $GITHUB_WORKSPACE/MoonlightStarlink.flatpak com.frogtale.MoonlightStarlink \
+            --runtime-repo=https://flathub.org/repo/flathub.flatpakrepo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: MoonlightStarlink-${{ github.sha }}
+          path: MoonlightStarlink.flatpak
+          compression-level: 0
