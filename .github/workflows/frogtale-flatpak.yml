@@ -22,15 +22,20 @@ jobs:
 
       - name: Install flatpak and org.flatpak.Builder
         run: |
+          # Ubuntu 24.04 ships flatpak 1.14; the PPA matches what org.flatpak.Builder bundles
+          sudo add-apt-repository -y ppa:flatpak/stable
           sudo apt-get update
           sudo apt-get install -y flatpak jq
           # Ubuntu 24.04 blocks the unprivileged user namespaces bubblewrap needs
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
-          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          # System-wide: org.flatpak.Builder could not see the SDK in the runner's user installation
+          sudo flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           # Ubuntu's flatpak-builder installs cmake and meson modules into /app/lib64 (see FROGTALE.md)
-          flatpak install --user -y --noninteractive flathub org.flatpak.Builder
+          sudo flatpak install --system -y --noninteractive flathub org.flatpak.Builder
           runtime=$(jq -r '."runtime-version"' flatpak/com.frogtale.MoonlightStarlink.json)
-          flatpak install --user -y --noninteractive flathub org.kde.Platform//$runtime org.kde.Sdk//$runtime
+          sudo flatpak install --system -y --noninteractive flathub org.kde.Platform//$runtime org.kde.Sdk//$runtime
+          flatpak --version
+          flatpak run --command=flatpak org.flatpak.Builder list --runtime
 
       - name: Restore the dependency build cache
         uses: actions/cache@v4
