@@ -1550,19 +1550,44 @@ bool FFmpegVideoDecoder::tryInitializeHwAccelDecoder(PDECODER_PARAMETERS params,
             continue;
         }
 
+        // FrogtaleTV patch: FROGTALE_VULKAN_DECODE=1 tries Vulkan Video first here too. This is the
+        // loop known codecs (HEVC on a Steam Deck) actually go through; the Moonlight log showed VAAPI
+        // initialised first with no Vulkan attempt when only the unknown-decoder loop was patched.
+        bool preferVulkanDecode = qEnvironmentVariableIntValue("FROGTALE_VULKAN_DECODE");
+
         // Look for the first matching hwaccel hardware decoder
-        for (int i = 0;; i++) {
+        for (int i = 0, vulkanPass = preferVulkanDecode ? 1 : 0;; i++) {
             const AVCodecHWConfig *config = avcodec_get_hw_config(decoder, i);
             if (!config) {
+                if (vulkanPass == 1) {
+                    // Vulkan was tried first; now try everything else in FFmpeg's order
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "FrogtaleTV: Vulkan decode unavailable, falling back");
+                    vulkanPass = 2;
+                    i = -1;
+                    continue;
+                }
+
                 // No remaining hwaccel options
                 break;
+            }
+
+            if ((vulkanPass == 1 && config->device_type != AV_HWDEVICE_TYPE_VULKAN) ||
+                    (vulkanPass == 2 && config->device_type == AV_HWDEVICE_TYPE_VULKAN)) {
+                continue;
             }
 
             // Initialize the hardware codec and submit a test frame if the renderer needs it
             IFFmpegRenderer::InitFailureReason failureReason;
             if (tryInitializeRenderer(decoder, AV_PIX_FMT_NONE, params, config, &failureReason,
                                       [config, params, pass]() -> IFFmpegRenderer* { return createHwAccelRenderer(config, params, pass); })) {
+                if (vulkanPass == 1) {
+                    SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "FrogtaleTV: using Vulkan Video decode");
+                }
                 return true;
+            }
+            else if (vulkanPass == 1) {
+                // A failed preferred-Vulkan attempt must not end the search
+                continue;
             }
             else if (failureReason == IFFmpegRenderer::InitFailureReason::NoHardwareSupport) {
                 terminallyFailedHardwareDecoders.insert(decoder);
