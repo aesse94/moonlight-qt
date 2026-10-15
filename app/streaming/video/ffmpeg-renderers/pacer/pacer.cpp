@@ -19,6 +19,56 @@
 // must not exceed the number buffer pool size to avoid running the decoder
 // out of available decoding surfaces.
 #define MAX_QUEUED_FRAMES 3
+
+#ifdef Q_OS_LINUX
+#include <time.h>
+
+// FrogtaleTV patch: frame pacing for X11, which has no IVsyncSource. A Steam Deck runs Moonlight as
+// an X11 client under gamescope, so "Frame pacing" silently fell through to rendering every frame
+// the moment it was decoded (no PacerVsync thread), and any network jitter (15-60 ms on Starlink,
+// Wi-Fi at home) showed up as uneven motion. GeForce Now presents by timestamp with an adaptive
+// queue. This ticks at the display rate from CLOCK_MONOTONIC so the pacer releases one frame per
+// refresh and keeps its 1-3 frame cushion; V-Sync (FIFO present) aligns each one to the real vblank.
+// On by default; FROGTALE_SOFT_VSYNC=0 restores stock behaviour.
+class SoftwareVsyncSource : public IVsyncSource
+{
+public:
+    bool initialize(SDL_Window*, int displayFps) override
+    {
+        if (displayFps <= 0) {
+            return false;
+        }
+        m_PeriodNs = 1000000000LL / displayFps;
+        clock_gettime(CLOCK_MONOTONIC, &m_Next);
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION, "FrogtaleTV: software vsync at %d Hz", displayFps);
+        return true;
+    }
+
+    bool isAsync() override
+    {
+        return false;
+    }
+
+    void waitForVsync() override
+    {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        long long next = (long long)m_Next.tv_sec * 1000000000LL + m_Next.tv_nsec + m_PeriodNs;
+        long long cur = (long long)now.tv_sec * 1000000000LL + now.tv_nsec;
+        if (next < cur - m_PeriodNs) {
+            // We fell more than a period behind (stall, suspend): restart the cadence from now
+            next = cur + m_PeriodNs;
+        }
+        m_Next.tv_sec = next / 1000000000LL;
+        m_Next.tv_nsec = next % 1000000000LL;
+        clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &m_Next, nullptr);
+    }
+
+private:
+    long long m_PeriodNs = 0;
+    struct timespec m_Next = {};
+};
+#endif
 static_assert(PACER_MAX_OUTSTANDING_FRAMES == MAX_QUEUED_FRAMES + 2,
               "PACER_MAX_OUTSTANDING_FRAMES and MAX_QUEUED_FRAMES must agree");
 
@@ -293,6 +343,12 @@ bool Pacer::initialize(SDL_Window* window, int maxVideoFps, bool enablePacing)
     #endif
 
         default:
+#ifdef Q_OS_LINUX
+            if (qEnvironmentVariable("FROGTALE_SOFT_VSYNC", "1") != "0") {
+                m_VsyncSource = new SoftwareVsyncSource();
+                break;
+            }
+#endif
             // Platforms without a VsyncSource will just render frames
             // immediately like they used to.
             break;
