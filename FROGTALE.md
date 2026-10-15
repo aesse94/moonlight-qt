@@ -21,6 +21,7 @@ not help: raising the host's FEC (whole frames are lost) and waiting for the pac
 | Poll the video socket every 10 ms while holding, so holds can't overrun during a stall | same | — |
 | Try Vulkan Video decoding before VAAPI (decoded frames stay in Vulkan; no per-frame DRM_PRIME import) | `app/streaming/video/ffmpeg.cpp` | `FROGTALE_VULKAN_DECODE=1`, plus `RADV_PERFTEST=video_decode` on Mesa 26.2 RADV |
 | Request 10 ms Opus packets (fewer audio wakeups at low TDP) | `app/streaming/audio/audio.cpp` | `FROGTALE_SLOW_OPUS=1` |
+| Frame pacing on X11: a 90 Hz software vsync clock, so the pacer releases one frame per refresh instead of drawing each frame the moment it decodes (stock Moonlight has no X11 vsync source, so "Frame pacing" did nothing on a Deck) | `app/streaming/video/ffmpeg-renderers/pacer/pacer.cpp` | on; `FROGTALE_SOFT_VSYNC=0` turns it off |
 | Write the log to a file on Linux (Game Mode discards stdout) | `app/main.cpp` | — (`/tmp/Moonlight-*.log` inside the sandbox) |
 
 Hold events go to `$XDG_CACHE_HOME/frogtale-reorder.log` as `epoch_ms outcome held_ms packets frame`.
