@@ -91,6 +91,10 @@ private:
     int m_QuietWindows;
     bool m_WindowAdapt;
     int m_WindowTarget;
+    bool m_StretchAb;
+    bool m_WindowStretch;
+    int m_WindowStretches;
+    uint64_t m_LastArrivalUs;
     uint64_t m_TickCount;
     uint64_t m_LastPresentUs;
     bool m_WindowActive;
