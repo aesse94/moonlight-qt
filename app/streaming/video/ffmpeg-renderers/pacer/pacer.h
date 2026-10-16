@@ -7,11 +7,15 @@
 #include <QMutex>
 #include <QWaitCondition>
 
+// FrogtaleTV patch: up to this many extra frames held in the pacing queue as a cushion
+// across a predicted Starlink handoff stall
+#define PACER_MAX_CUSHION_FRAMES 6
+
 // The maximum number of frames pacer will ever hold is:
-// - 3 frames in the pacing queue
+// - 3 frames in the pacing queue (+ the handoff cushion)
 // - 1 frame removed from the render queue in the process of rendering
 // - 1 frame for deferred free
-#define PACER_MAX_OUTSTANDING_FRAMES (3 + 1 + 1)
+#define PACER_MAX_OUTSTANDING_FRAMES (3 + PACER_MAX_CUSHION_FRAMES + 1 + 1)
 
 class IVsyncSource {
 public:
@@ -54,7 +58,9 @@ private:
 
     void renderFrame(AVFrame* frame);
 
-    void dropFrameForEnqueue(QQueue<AVFrame*>& queue);
+    void dropFrameForEnqueue(QQueue<AVFrame*>& queue, int limit);
+
+    int cushionState();
 
     QQueue<AVFrame*> m_RenderQueue;
     QQueue<AVFrame*> m_PacingQueue;
@@ -75,4 +81,15 @@ private:
     int m_DisplayFps;
     PVIDEO_STATS m_VideoStats;
     int m_RendererAttributes;
+
+    // FrogtaleTV handoff cushion
+    int m_CushionFrames;
+    bool m_CushionAb;
+    uint64_t m_TickCount;
+    uint64_t m_LastPresentUs;
+    bool m_WindowActive;
+    bool m_WindowArm;
+    int m_WindowMaxGapMs;
+    int m_WindowMaxQueue;
+    int m_WindowSkips;
 };

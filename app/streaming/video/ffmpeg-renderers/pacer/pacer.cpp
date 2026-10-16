@@ -12,6 +12,8 @@
 #endif
 
 #include <SDL_syswm.h>
+#include <QDateTime>
+#include <climits>
 
 // Limit the number of queued frames to prevent excessive memory consumption
 // if the V-Sync source or renderer is blocked for a while. It's important
@@ -69,7 +71,7 @@ private:
     struct timespec m_Next = {};
 };
 #endif
-static_assert(PACER_MAX_OUTSTANDING_FRAMES == MAX_QUEUED_FRAMES + 2,
+static_assert(PACER_MAX_OUTSTANDING_FRAMES == MAX_QUEUED_FRAMES + PACER_MAX_CUSHION_FRAMES + 2,
               "PACER_MAX_OUTSTANDING_FRAMES and MAX_QUEUED_FRAMES must agree");
 
 // We may be woken up slightly late so don't go all the way
@@ -88,9 +90,77 @@ Pacer::Pacer(IFFmpegRenderer* renderer, PVIDEO_STATS videoStats) :
     m_VsyncRenderer(renderer),
     m_MaxVideoFps(0),
     m_DisplayFps(0),
-    m_VideoStats(videoStats)
+    m_VideoStats(videoStats),
+    m_TickCount(0),
+    m_LastPresentUs(0),
+    m_WindowActive(false),
+    m_WindowArm(false),
+    m_WindowMaxGapMs(0),
+    m_WindowMaxQueue(0),
+    m_WindowSkips(0)
 {
+    // FrogtaleTV patch: frames to bank before each predicted Starlink handoff stall (0 = off), and
+    // FROGTALE_CUSHION_AB=1 to use the cushion only in odd UTC minutes (A/B against the same weather)
+    m_CushionFrames = SDL_clamp(qEnvironmentVariableIntValue("FROGTALE_CUSHION") ?
+                                    qEnvironmentVariableIntValue("FROGTALE_CUSHION") : 5,
+                                0, PACER_MAX_CUSHION_FRAMES);
+    if (qEnvironmentVariable("FROGTALE_CUSHION") == "0") {
+        m_CushionFrames = 0;
+    }
+    m_CushionAb = qEnvironmentVariableIntValue("FROGTALE_CUSHION_AB") != 0;
+}
 
+// FrogtaleTV patch: a cushion across Starlink handoffs. With the 40% host dip the stall still
+// freezes the picture for a median ~60 ms every 15 s (2026-10-16). The stall's moment is
+// predictable (LiFrogtaleHandoffPhaseMs), so for ~350 ms before it every third refresh repeats
+// the current picture instead of advancing, banking up to m_CushionFrames decoded frames (~55 ms
+// at 90 fps). During the stall those frames keep playing; afterwards the burst that arrives is
+// trimmed back one frame per refresh, instead of all at once. Returns 0 normal, 1 banking,
+// 2 riding the stall, 3 trimming. Also measures, per handoff, the longest gap between new
+// pictures (the visible freeze) for the A/B, logged as "FrogtaleTV cushion".
+int Pacer::cushionState()
+{
+    if (m_CushionFrames <= 0) {
+        return 0;
+    }
+    int phase = LiFrogtaleHandoffPhaseMs();
+    if (phase < 0) {
+        return 0;
+    }
+    qint64 wall = QDateTime::currentMSecsSinceEpoch();
+    int nowPhase = (int)(wall % 15000);
+    int untilMs = (phase - nowPhase + 15000) % 15000;
+    int sinceMs = (nowPhase - phase + 15000) % 15000;
+    bool arm = !m_CushionAb || (wall / 60000) % 2 == 1;
+
+    bool inWindow = untilMs <= 500 || sinceMs <= 1000;
+    if (inWindow && !m_WindowActive) {
+        m_WindowActive = true;
+        m_WindowArm = arm;
+        m_WindowMaxGapMs = 0;
+        m_WindowMaxQueue = 0;
+        m_WindowSkips = 0;
+    }
+    else if (!inWindow && m_WindowActive) {
+        m_WindowActive = false;
+        SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
+                    "FrogtaleTV cushion: %s maxgap=%d ms maxqueue=%d banked=%d phase=%d",
+                    m_WindowArm ? "on" : "off", m_WindowMaxGapMs, m_WindowMaxQueue, m_WindowSkips, phase);
+    }
+
+    if (!m_WindowArm || !m_WindowActive) {
+        return 0;
+    }
+    if (untilMs <= 350) {
+        return 1;
+    }
+    if (sinceMs <= 400) {
+        return 2;
+    }
+    if (sinceMs <= 1000) {
+        return 3;
+    }
+    return 0;
 }
 
 Pacer::~Pacer()
@@ -228,7 +298,7 @@ int Pacer::renderThread(void* context)
 
 void Pacer::enqueueFrameForRenderingAndUnlock(AVFrame *frame)
 {
-    dropFrameForEnqueue(m_RenderQueue);
+    dropFrameForEnqueue(m_RenderQueue, MAX_QUEUED_FRAMES);
     m_RenderQueue.enqueue(frame);
 
     m_FrameQueueLock.unlock();
@@ -255,6 +325,9 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
 
     m_FrameQueueLock.lock();
 
+    int cushion = cushionState();
+    m_TickCount++;
+
     // If the queue length history entries are large, be strict
     // about dropping excess frames.
     int frameDropTarget = 1;
@@ -280,8 +353,17 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
         m_PacingQueueHistory.enqueue(m_PacingQueue.count());
     }
 
-    // Catch up if we're several frames ahead
-    while (m_PacingQueue.count() > frameDropTarget) {
+    if (cushion == 1 && m_PacingQueue.count() <= m_CushionFrames && m_TickCount % 3 == 0) {
+        // Bank a frame: show the current picture for one more refresh
+        m_WindowSkips++;
+        m_FrameQueueLock.unlock();
+        return;
+    }
+
+    // Catch up if we're several frames ahead (not while banking or riding the stall; one frame
+    // per refresh while trimming the cushion back)
+    int maxDrops = (cushion == 1 || cushion == 2) ? 0 : cushion == 3 ? 1 : INT_MAX;
+    while (maxDrops-- > 0 && m_PacingQueue.count() > frameDropTarget) {
         AVFrame* frame = m_PacingQueue.dequeue();
 
         // Drop the lock while we call av_frame_free()
@@ -303,6 +385,18 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
             m_FrameQueueLock.unlock();
             return;
         }
+    }
+
+    if (m_WindowActive) {
+        uint64_t nowUs = LiGetMicroseconds();
+        if (m_LastPresentUs != 0) {
+            m_WindowMaxGapMs = SDL_max(m_WindowMaxGapMs, (int)((nowUs - m_LastPresentUs) / 1000));
+        }
+        m_WindowMaxQueue = SDL_max(m_WindowMaxQueue, (int)m_PacingQueue.count());
+        m_LastPresentUs = nowUs;
+    }
+    else {
+        m_LastPresentUs = LiGetMicroseconds();
     }
 
     // Place the first frame on the render queue
@@ -447,10 +541,10 @@ void Pacer::renderFrame(AVFrame* frame)
     m_FrameQueueLock.unlock();
 }
 
-void Pacer::dropFrameForEnqueue(QQueue<AVFrame*>& queue)
+void Pacer::dropFrameForEnqueue(QQueue<AVFrame*>& queue, int limit)
 {
-    SDL_assert(queue.size() <= MAX_QUEUED_FRAMES);
-    if (queue.size() == MAX_QUEUED_FRAMES) {
+    SDL_assert(queue.size() <= limit);
+    if (queue.size() >= limit) {
         AVFrame* frame = queue.dequeue();
         av_frame_free(&frame);
     }
@@ -464,7 +558,7 @@ void Pacer::submitFrame(AVFrame* frame)
     // Queue the frame and possibly wake up the render thread
     m_FrameQueueLock.lock();
     if (m_VsyncSource != nullptr) {
-        dropFrameForEnqueue(m_PacingQueue);
+        dropFrameForEnqueue(m_PacingQueue, MAX_QUEUED_FRAMES + m_CushionFrames);
         m_PacingQueue.enqueue(frame);
         m_FrameQueueLock.unlock();
         m_PacingQueueNotEmpty.wakeOne();
