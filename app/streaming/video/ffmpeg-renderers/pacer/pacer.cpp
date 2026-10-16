@@ -108,6 +108,20 @@ Pacer::Pacer(IFFmpegRenderer* renderer, PVIDEO_STATS videoStats) :
         m_CushionFrames = 0;
     }
     m_CushionAb = qEnvironmentVariableIntValue("FROGTALE_CUSHION_AB") != 0;
+
+    // Adaptive depth: after a handoff whose stall outlasted the cushion (a visible freeze of 60 ms+),
+    // bank 2 more frames next time, up to FROGTALE_CUSHION_MAX (default 10, ~110 ms at 90 fps); after
+    // 4 smooth handoffs in a row, one fewer, down to FROGTALE_CUSHION. 2026-10-16 12:03-12:20 with a
+    // fixed 5: median freeze 39 ms but 3 of 67 handoffs >= 100 ms (Starlink stalls of 100-170 ms).
+    // FROGTALE_CUSHION_ADAPT_AB=1 adapts only in odd UTC minutes (fixed depth in even ones).
+    m_CushionMax = SDL_clamp(qEnvironmentVariableIntValue("FROGTALE_CUSHION_MAX") ?
+                                 qEnvironmentVariableIntValue("FROGTALE_CUSHION_MAX") : PACER_MAX_CUSHION_FRAMES,
+                             m_CushionFrames, PACER_MAX_CUSHION_FRAMES);
+    m_CushionAdaptAb = qEnvironmentVariableIntValue("FROGTALE_CUSHION_ADAPT_AB") != 0;
+    m_CushionTarget = m_CushionFrames;
+    m_QuietWindows = 0;
+    m_WindowAdapt = false;
+    m_WindowTarget = m_CushionFrames;
 }
 
 // FrogtaleTV patch: a cushion across Starlink handoffs. With the 40% host dip the stall still
@@ -133,10 +147,12 @@ int Pacer::cushionState()
     int sinceMs = (nowPhase - phase + 15000) % 15000;
     bool arm = !m_CushionAb || (wall / 60000) % 2 == 1;
 
-    bool inWindow = untilMs <= 500 || sinceMs <= 1000;
+    bool inWindow = untilMs <= 650 || sinceMs <= 1000;
     if (inWindow && !m_WindowActive) {
         m_WindowActive = true;
         m_WindowArm = arm;
+        m_WindowAdapt = !m_CushionAdaptAb || (wall / 60000) % 2 == 1;
+        m_WindowTarget = m_WindowAdapt ? m_CushionTarget : m_CushionFrames;
         m_WindowMaxGapMs = 0;
         m_WindowMaxQueue = 0;
         m_WindowSkips = 0;
@@ -144,14 +160,25 @@ int Pacer::cushionState()
     else if (!inWindow && m_WindowActive) {
         m_WindowActive = false;
         SDL_LogInfo(SDL_LOG_CATEGORY_APPLICATION,
-                    "FrogtaleTV cushion: %s maxgap=%d ms maxqueue=%d banked=%d phase=%d",
-                    m_WindowArm ? "on" : "off", m_WindowMaxGapMs, m_WindowMaxQueue, m_WindowSkips, phase);
+                    "FrogtaleTV cushion: %s maxgap=%d ms maxqueue=%d banked=%d phase=%d target=%d adapt=%d",
+                    m_WindowArm ? "on" : "off", m_WindowMaxGapMs, m_WindowMaxQueue, m_WindowSkips, phase,
+                    m_WindowTarget, m_WindowAdapt ? 1 : 0);
+        if (m_WindowArm && m_WindowAdapt) {
+            if (m_WindowMaxGapMs >= 60) {
+                m_CushionTarget = SDL_min(m_CushionMax, m_CushionTarget + 2);
+                m_QuietWindows = 0;
+            }
+            else if (++m_QuietWindows >= 4) {
+                m_CushionTarget = SDL_max(m_CushionFrames, m_CushionTarget - 1);
+                m_QuietWindows = 0;
+            }
+        }
     }
 
     if (!m_WindowArm || !m_WindowActive) {
         return 0;
     }
-    if (untilMs <= 350) {
+    if (untilMs <= (m_WindowTarget > 6 ? 550 : 350)) {
         return 1;
     }
     if (sinceMs <= 400) {
@@ -353,7 +380,7 @@ void Pacer::handleVsync(int timeUntilNextVsyncMillis)
         m_PacingQueueHistory.enqueue(m_PacingQueue.count());
     }
 
-    if (cushion == 1 && m_PacingQueue.count() <= m_CushionFrames && m_TickCount % 3 == 0) {
+    if (cushion == 1 && m_PacingQueue.count() <= m_WindowTarget && m_TickCount % 3 == 0) {
         // Bank a frame: show the current picture for one more refresh
         m_WindowSkips++;
         m_FrameQueueLock.unlock();
@@ -558,7 +585,7 @@ void Pacer::submitFrame(AVFrame* frame)
     // Queue the frame and possibly wake up the render thread
     m_FrameQueueLock.lock();
     if (m_VsyncSource != nullptr) {
-        dropFrameForEnqueue(m_PacingQueue, MAX_QUEUED_FRAMES + m_CushionFrames);
+        dropFrameForEnqueue(m_PacingQueue, MAX_QUEUED_FRAMES + m_CushionMax);
         m_PacingQueue.enqueue(frame);
         m_FrameQueueLock.unlock();
         m_PacingQueueNotEmpty.wakeOne();

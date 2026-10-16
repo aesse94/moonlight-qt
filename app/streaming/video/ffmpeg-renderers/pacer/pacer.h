@@ -9,7 +9,7 @@
 
 // FrogtaleTV patch: up to this many extra frames held in the pacing queue as a cushion
 // across a predicted Starlink handoff stall
-#define PACER_MAX_CUSHION_FRAMES 6
+#define PACER_MAX_CUSHION_FRAMES 10
 
 // The maximum number of frames pacer will ever hold is:
 // - 3 frames in the pacing queue (+ the handoff cushion)
@@ -85,6 +85,12 @@ private:
     // FrogtaleTV handoff cushion
     int m_CushionFrames;
     bool m_CushionAb;
+    int m_CushionMax;
+    bool m_CushionAdaptAb;
+    int m_CushionTarget;
+    int m_QuietWindows;
+    bool m_WindowAdapt;
+    int m_WindowTarget;
     uint64_t m_TickCount;
     uint64_t m_LastPresentUs;
     bool m_WindowActive;
