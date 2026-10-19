@@ -15,9 +15,20 @@
 #include <libavformat/avio.h>
 #include <libavutil/mem.h>
 
+#include <sys/time.h>
+
 // Private libavformat API for writing the AV1 Codec Configuration Box
 extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
                               int write_seq_header);
+
+// FrogtaleTV patch: frames banked in the pacing queue before each predicted Starlink handoff
+// stall, adapted per handoff between these (4-7 frames is 67-117 ms at 60 fps). Our pacing queue
+// is moonlight-common-c's decode unit queue, which flushes and asks for an IDR frame once it
+// reaches 15, so the bank plus the burst that lands after a stall must stay well under that, and
+// above CUSHION_QUEUE_LIMIT we catch up whatever the cushion is doing.
+#define CUSHION_MIN_FRAMES 4
+#define CUSHION_MAX_FRAMES 7
+#define CUSHION_QUEUE_LIMIT 12
 
 @implementation VideoDecoderRenderer {
     StreamView* _view;
@@ -35,6 +46,21 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     
     CADisplayLink* _displayLink;
     BOOL framePacing;
+
+    // FrogtaleTV handoff cushion
+    int cushionFrames;
+    int cushionTarget;
+    int quietWindows;
+    BOOL windowActive;
+    int windowTarget;
+    int windowMaxGapMs;
+    int windowMaxQueue;
+    int windowSkips;
+    int windowStretches;
+    uint64_t tickCount;
+    uint64_t lastPresentUs;
+    uint64_t lastArrivalUs;
+    int pendingAfterTick;
 }
 
 - (void)reinitializeDisplayLayer
@@ -77,15 +103,19 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     }
 }
 
-- (id)initWithView:(StreamView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing
+- (id)initWithView:(StreamView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing starlinkCushion:(BOOL)starlinkCushion
 {
     self = [super init];
-    
+
     _view = view;
     _callbacks = callbacks;
     _streamAspectRatio = aspectRatio;
     framePacing = useFramePacing;
-    
+
+    // The cushion banks frames in the pacing queue, so it does nothing without frame pacing
+    cushionFrames = (useFramePacing && starlinkCushion) ? CUSHION_MIN_FRAMES : 0;
+    cushionTarget = cushionFrames;
+
     parameterSetBuffers = [[NSMutableArray alloc] init];
     
     [self reinitializeDisplayLayer];
@@ -114,29 +144,143 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
 // TODO: Refactor this
 int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
 
+// FrogtaleTV patch: a cushion across Starlink handoffs, ported from the Steam Deck build's pacer.
+// The stall's moment is predictable (LiFrogtaleHandoffPhaseMs), so for ~350 ms before it every
+// third refresh repeats the current picture instead of advancing, banking up to cushionTarget
+// frames. During the stall those frames keep playing; afterwards the burst that arrives is
+// trimmed back one frame per refresh, instead of all at once. Returns 0 normal, 1 banking,
+// 2 riding the stall, 3 trimming. Also measures, per handoff, the longest gap between new
+// pictures (the visible freeze), logged as "FrogtaleTV cushion".
+- (int)cushionState
+{
+    int phase = LiFrogtaleHandoffPhaseMs();
+    if (phase < 0) {
+        windowActive = NO;
+        return 0;
+    }
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    uint64_t wall = (uint64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+    int nowPhase = (int)(wall % 15000);
+    int untilMs = (phase - nowPhase + 15000) % 15000;
+    int sinceMs = (nowPhase - phase + 15000) % 15000;
+
+    BOOL inWindow = untilMs <= 650 || sinceMs <= 1000;
+    if (inWindow && !windowActive) {
+        windowActive = YES;
+        windowTarget = cushionTarget;
+        windowMaxGapMs = 0;
+        windowMaxQueue = 0;
+        windowSkips = 0;
+        windowStretches = 0;
+    }
+    else if (!inWindow && windowActive) {
+        windowActive = NO;
+        Log(LOG_I, @"FrogtaleTV cushion: maxgap=%d ms maxqueue=%d banked=%d stretched=%d phase=%d target=%d",
+            windowMaxGapMs, windowMaxQueue, windowSkips, windowStretches, phase, windowTarget);
+
+        // After a handoff whose stall outlasted the cushion (a visible freeze of 60 ms+), bank
+        // 2 more frames next time; after 4 smooth handoffs in a row, one fewer
+        if (windowMaxGapMs >= 60) {
+            cushionTarget = MIN(CUSHION_MAX_FRAMES, cushionTarget + 2);
+            quietWindows = 0;
+        }
+        else if (++quietWindows >= 4) {
+            cushionTarget = MAX(cushionFrames, cushionTarget - 1);
+            quietWindows = 0;
+        }
+    }
+
+    if (!windowActive) {
+        return 0;
+    }
+    if (untilMs <= (windowTarget > 5 ? 550 : 350)) {
+        return 1;
+    }
+    if (sinceMs <= 600) {
+        return 2;
+    }
+    if (sinceMs <= 1000) {
+        return 3;
+    }
+    return 0;
+}
+
 - (void)displayLinkCallback:(CADisplayLink *)sender
 {
     VIDEO_FRAME_HANDLE handle;
     PDECODE_UNIT du;
-    
-    while (LiPollNextVideoFrame(&handle, &du)) {
+
+    // Only pace frames if the display refresh rate is >= 90% of our stream frame rate.
+    // Battery saver, accessibility settings, or device thermals can cause the actual
+    // refresh rate of the display to drop below the physical maximum.
+    BOOL pacing = NO;
+    if (framePacing) {
+        // Calculate the actual display refresh rate
+        double displayRefreshRate = 1 / (_displayLink.targetTimestamp - _displayLink.timestamp);
+        pacing = displayRefreshRate >= frameRate * 0.9f;
+    }
+
+    int cushion = 0;
+    int maxSubmits = INT_MAX;
+    if (pacing && cushionFrames > 0) {
+        cushion = [self cushionState];
+        tickCount++;
+
+        uint64_t nowUs = LiGetMicroseconds();
+        int pending = LiGetPendingVideoFrames();
+        if (pending > pendingAfterTick) {
+            lastArrivalUs = nowUs;
+        }
+        if (windowActive) {
+            windowMaxQueue = MAX(windowMaxQueue, pending);
+        }
+
+        if (pending < CUSHION_QUEUE_LIMIT) {
+            // We normally leave one frame pending, so one frame is already banked
+            if (cushion == 1 && pending <= windowTarget + 1 && tickCount % 3 == 0) {
+                // Bank a frame: show the current picture for one more refresh
+                windowSkips++;
+                pendingAfterTick = pending;
+                return;
+            }
+
+            if (cushion == 2 && pending > 0 && tickCount % 2 == 0 && nowUs - lastArrivalUs > 35000) {
+                // Riding a stall: hold this picture one more refresh so the cushion lasts twice as long
+                windowStretches++;
+                pendingAfterTick = pending;
+                return;
+            }
+
+            // No catching up while banking or riding the stall; one extra frame per refresh
+            // while trimming the cushion back
+            maxSubmits = (cushion == 1 || cushion == 2) ? 1 : cushion == 3 ? 2 : INT_MAX;
+        }
+    }
+
+    BOOL presented = NO;
+    while (maxSubmits-- > 0 && LiPollNextVideoFrame(&handle, &du)) {
         LiCompleteVideoFrame(handle, DrSubmitDecodeUnit(du));
-        
-        if (framePacing) {
-            // Calculate the actual display refresh rate
-            double displayRefreshRate = 1 / (_displayLink.targetTimestamp - _displayLink.timestamp);
-            
-            // Only pace frames if the display refresh rate is >= 90% of our stream frame rate.
-            // Battery saver, accessibility settings, or device thermals can cause the actual
-            // refresh rate of the display to drop below the physical maximum.
-            if (displayRefreshRate >= frameRate * 0.9f) {
-                // Keep one pending frame to smooth out gaps due to
-                // network jitter at the cost of 1 frame of latency
-                if (LiGetPendingVideoFrames() == 1) {
-                    break;
-                }
+        presented = YES;
+
+        if (pacing) {
+            // Keep one pending frame to smooth out gaps due to
+            // network jitter at the cost of 1 frame of latency
+            if (LiGetPendingVideoFrames() == 1) {
+                break;
             }
         }
+    }
+
+    if (pacing && cushionFrames > 0) {
+        if (presented) {
+            uint64_t nowUs = LiGetMicroseconds();
+            if (windowActive && lastPresentUs != 0) {
+                windowMaxGapMs = MAX(windowMaxGapMs, (int)((nowUs - lastPresentUs) / 1000));
+            }
+            lastPresentUs = nowUs;
+        }
+        pendingAfterTick = LiGetPendingVideoFrames();
     }
 }
 
