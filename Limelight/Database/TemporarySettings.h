@@ -34,6 +34,8 @@
 @property (nonatomic) BOOL btMouseSupport;
 @property (nonatomic) BOOL absoluteTouchMode;
 @property (nonatomic) BOOL statsOverlay;
+@property (nonatomic) BOOL starlinkNack;
+@property (nonatomic) BOOL starlinkCushion;
 
 - (id) initFromSettings:(Settings*)settings;
 

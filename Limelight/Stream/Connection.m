@@ -435,6 +435,26 @@ void ClSetControllerLED(uint16_t controllerNumber, uint8_t r, uint8_t g, uint8_t
     renderer = myRenderer;
     _callbacks = callbacks;
 
+    // FrogtaleTV patch: moonlight-common-c reads its Starlink switches from the environment when
+    // the video stream starts. NACK (and the queueing delay reports that follow it) need the
+    // patched host, aesse94/Apollo branch frogtale-starlink; the reorder hold works with any host.
+    if (config.starlinkNack) {
+        setenv("FROGTALE_NACK", "1", 1);
+    }
+    else {
+        unsetenv("FROGTALE_NACK");
+    }
+
+    // There's no XDG_CACHE_HOME or writable /tmp in the tvOS sandbox, so put the hold log in Caches.
+    // It's opened for append on every stream, so start over once it gets large.
+    NSString* cacheDir = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+    NSString* reorderLogPath = [cacheDir stringByAppendingPathComponent:@"frogtale-reorder.log"];
+    NSDictionary* reorderLogAttrs = [[NSFileManager defaultManager] attributesOfItemAtPath:reorderLogPath error:nil];
+    if (reorderLogAttrs != nil && [reorderLogAttrs fileSize] > 4 * 1024 * 1024) {
+        [[NSFileManager defaultManager] removeItemAtPath:reorderLogPath error:nil];
+    }
+    setenv("FROGTALE_REORDER_LOG", [reorderLogPath fileSystemRepresentation], 1);
+
     LiInitializeStreamConfiguration(&_streamConfig);
     _streamConfig.width = config.width;
     _streamConfig.height = config.height;

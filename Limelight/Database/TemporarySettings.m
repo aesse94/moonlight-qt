@@ -45,6 +45,8 @@
     self.swapABXYButtons = [[NSUserDefaults standardUserDefaults] boolForKey:@"swapABXYButtons"];
     self.btMouseSupport = [[NSUserDefaults standardUserDefaults] boolForKey:@"btMouseSupport"];
     self.statsOverlay = [[NSUserDefaults standardUserDefaults] boolForKey:@"statsOverlay"];
+    self.starlinkNack = [[NSUserDefaults standardUserDefaults] boolForKey:@"starlinkNack"];
+    self.starlinkCushion = [[NSUserDefaults standardUserDefaults] boolForKey:@"starlinkCushion"];
     
     NSInteger _screenSize = [[NSUserDefaults standardUserDefaults] integerForKey:@"streamResolution"];
     switch (_screenSize) {
@@ -85,6 +87,9 @@
     self.btMouseSupport = settings.btMouseSupport;
     self.absoluteTouchMode = settings.absoluteTouchMode;
     self.statsOverlay = settings.statsOverlay;
+    // FrogtaleTV: the Starlink options are only in the Apple TV settings so far
+    self.starlinkNack = NO;
+    self.starlinkCushion = NO;
 #endif
     self.uniqueId = settings.uniqueId;
     

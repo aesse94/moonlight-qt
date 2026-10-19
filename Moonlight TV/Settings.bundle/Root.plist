@@ -64,7 +64,7 @@
 			<key>Key</key>
 			<string>bitrate</string>
 			<key>DefaultValue</key>
-			<string>20000</string>
+			<string>15000</string>
 			<key>Titles</key>
 			<array>
 				<string>0.5 Mbps</string>
@@ -72,6 +72,8 @@
 				<string>2 Mbps</string>
 				<string>5 Mbps</string>
 				<string>10 Mbps</string>
+				<string>12 Mbps</string>
+				<string>15 Mbps</string>
 				<string>20 Mbps</string>
 				<string>25 Mbps</string>
 				<string>50 Mbps</string>
@@ -87,6 +89,8 @@
 				<string>2000</string>
 				<string>5000</string>
 				<string>10000</string>
+				<string>12000</string>
+				<string>15000</string>
 				<string>20000</string>
 				<string>25000</string>
 				<string>50000</string>
@@ -194,7 +198,7 @@
 			<key>Key</key>
 			<string>preferredCodec</string>
 			<key>DefaultValue</key>
-			<string>0</string>
+			<string>2</string>
 			<key>Values</key>
 			<array>
 				<string>0</string>
@@ -216,7 +220,7 @@
 			<key>Key</key>
 			<string>useFramePacing</string>
 			<key>DefaultValue</key>
-			<string>0</string>
+			<string>1</string>
 			<key>Values</key>
 			<array>
 				<string>0</string>
@@ -237,6 +241,34 @@
 			<string>enableHdr</string>
 			<key>DefaultValue</key>
 			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSGroupSpecifier</string>
+			<key>Title</key>
+			<string>Starlink</string>
+			<key>FooterText</key>
+			<string>NACK needs the FrogtaleTV Apollo host (aesse94/Apollo, frogtale-starlink). The handoff cushion needs Frame Pacing set to Smoothest Video.</string>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>NACK Lost Video Packets</string>
+			<key>Key</key>
+			<string>starlinkNack</string>
+			<key>DefaultValue</key>
+			<true/>
+		</dict>
+		<dict>
+			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Handoff Cushion</string>
+			<key>Key</key>
+			<string>starlinkCushion</string>
+			<key>DefaultValue</key>
+			<true/>
 		</dict>
 		<dict>
 			<key>Type</key>

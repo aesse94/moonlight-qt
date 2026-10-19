@@ -30,6 +30,8 @@
 @property int supportedVideoFormats;
 @property BOOL multiController;
 @property BOOL useFramePacing;
+@property BOOL starlinkNack;
+@property BOOL starlinkCushion;
 @property NSData* serverCert;
 
 @end
