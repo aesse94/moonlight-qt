@@ -35,13 +35,14 @@ void LogFileWrite(NSString* line) {
     }
     
     // Wall clock time, so stalls can be lined up with Starlink's :12/:27/:42/:57 handoffs
-    struct timeval tv;
-    struct tm tm;
-    gettimeofday(&tv, NULL);
-    localtime_r(&tv.tv_sec, &tm);
+    // (NSCalendar rather than localtime_r: Xcode 27's explicit modules reject struct tm here)
+    NSDate* now = [NSDate date];
+    NSDateComponents* c = [[NSCalendar currentCalendar] components:NSCalendarUnitHour | NSCalendarUnitMinute |
+                                                                   NSCalendarUnitSecond | NSCalendarUnitNanosecond
+                                                          fromDate:now];
     size_t length = strlen(text);
-    fprintf(logFile, "%02d:%02d:%02d.%03d %s%s", tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(tv.tv_usec / 1000),
-            text, (length > 0 && text[length - 1] == '\n') ? "" : "\n");
+    fprintf(logFile, "%02ld:%02ld:%02ld.%03d %s%s", (long)c.hour, (long)c.minute, (long)c.second,
+            (int)(c.nanosecond / 1000000), text, (length > 0 && text[length - 1] == '\n') ? "" : "\n");
 }
 #endif
 
