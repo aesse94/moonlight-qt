@@ -10,6 +10,41 @@
 
 static LogLevel LoggerLogLevel = LOG_I;
 
+#if TARGET_OS_TV
+#include <sys/time.h>
+
+// FrogtaleTV patch: the log only goes to the console, which is gone unless Xcode is attached, so a
+// Starlink test session couldn't be read afterwards. Also write it (ours and moonlight-common-c's)
+// to Library/Caches/Moonlight.log, replaced on each launch. Download it with Xcode -> Devices and
+// Simulators -> the Apple TV -> Moonlight Starlink -> Download Container.
+static FILE* logFile;
+
+void LogFileWrite(NSString* line) {
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSString* cacheDir = NSSearchPathForDirectoriesInDomains(NSCachesDirectory, NSUserDomainMask, YES).firstObject;
+        logFile = fopen([[cacheDir stringByAppendingPathComponent:@"Moonlight.log"] fileSystemRepresentation], "w");
+        if (logFile != NULL) {
+            setvbuf(logFile, NULL, _IOLBF, 0);
+        }
+    });
+    
+    const char* text = line.UTF8String;
+    if (logFile == NULL || text == NULL) {
+        return;
+    }
+    
+    // Wall clock time, so stalls can be lined up with Starlink's :12/:27/:42/:57 handoffs
+    struct timeval tv;
+    struct tm tm;
+    gettimeofday(&tv, NULL);
+    localtime_r(&tv.tv_sec, &tm);
+    size_t length = strlen(text);
+    fprintf(logFile, "%02d:%02d:%02d.%03d %s%s", tm.tm_hour, tm.tm_min, tm.tm_sec, (int)(tv.tv_usec / 1000),
+            text, (length > 0 && text[length - 1] == '\n') ? "" : "\n");
+}
+#endif
+
 void LogTagv(LogLevel level, NSString* tag, NSString* fmt, va_list args);
 
 void Log(LogLevel level, NSString* fmt, ...) {
@@ -57,5 +92,13 @@ void LogTagv(LogLevel level, NSString* tag, NSString* fmt, va_list args) {
     } else {
         prefixedString = [NSString stringWithFormat:@"%@ %@", levelPrefix, fmt];
     }
+#if TARGET_OS_TV
+    va_list fileArgs;
+    va_copy(fileArgs, args);
     NSLogv(prefixedString, args);
+    LogFileWrite([[NSString alloc] initWithFormat:prefixedString arguments:fileArgs]);
+    va_end(fileArgs);
+#else
+    NSLogv(prefixedString, args);
+#endif
 }

@@ -26,4 +26,9 @@ typedef enum {
 void Log(LogLevel level, NSString* fmt, ...);
 void LogTag(LogLevel level, NSString* tag, NSString* fmt, ...);
 
+#if TARGET_OS_TV
+// FrogtaleTV patch: append a line to Library/Caches/Moonlight.log (see Logger.m)
+void LogFileWrite(NSString* line);
+#endif
+
 #endif

@@ -336,7 +336,15 @@ void ClLogMessage(const char* format, ...)
 {
     va_list va;
     va_start(va, format);
+#if TARGET_OS_TV
+    // FrogtaleTV patch: moonlight-common-c's log (holds, NACKs, delay reports) goes to the log file too
+    char message[1024];
+    vsnprintf(message, sizeof(message), format, va);
+    fputs(message, stderr);
+    LogFileWrite([NSString stringWithUTF8String:message]);
+#else
     vfprintf(stderr, format, va);
+#endif
     va_end(va);
 }
 
