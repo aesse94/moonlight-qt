@@ -32,6 +32,7 @@
 @property BOOL useFramePacing;
 @property BOOL starlinkNack;
 @property BOOL starlinkCushion;
+@property BOOL starlinkCushionAb;
 @property NSData* serverCert;
 
 @end

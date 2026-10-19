@@ -272,6 +272,16 @@
 		</dict>
 		<dict>
 			<key>Type</key>
+			<string>PSToggleSwitchSpecifier</string>
+			<key>Title</key>
+			<string>Cushion A/B Test (Odd Minutes Only)</string>
+			<key>Key</key>
+			<string>starlinkCushionAb</string>
+			<key>DefaultValue</key>
+			<false/>
+		</dict>
+		<dict>
+			<key>Type</key>
 			<string>PSGroupSpecifier</string>
 			<key>Title</key>
 			<string>Troubleshooting</string>

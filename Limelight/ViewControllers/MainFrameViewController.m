@@ -640,6 +640,7 @@ static NSMutableSet* hostList;
     _streamConfig.useFramePacing = streamSettings.useFramePacing;
     _streamConfig.starlinkNack = streamSettings.starlinkNack;
     _streamConfig.starlinkCushion = streamSettings.starlinkCushion;
+    _streamConfig.starlinkCushionAb = streamSettings.starlinkCushionAb;
     _streamConfig.swapABXYButtons = streamSettings.swapABXYButtons;
     
     // multiController must be set before calling getConnectedGamepadMask

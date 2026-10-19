@@ -47,6 +47,7 @@
     self.statsOverlay = [[NSUserDefaults standardUserDefaults] boolForKey:@"statsOverlay"];
     self.starlinkNack = [[NSUserDefaults standardUserDefaults] boolForKey:@"starlinkNack"];
     self.starlinkCushion = [[NSUserDefaults standardUserDefaults] boolForKey:@"starlinkCushion"];
+    self.starlinkCushionAb = [[NSUserDefaults standardUserDefaults] boolForKey:@"starlinkCushionAb"];
     
     NSInteger _screenSize = [[NSUserDefaults standardUserDefaults] integerForKey:@"streamResolution"];
     switch (_screenSize) {
@@ -90,6 +91,7 @@
     // FrogtaleTV: the Starlink options are only in the Apple TV settings so far
     self.starlinkNack = NO;
     self.starlinkCushion = NO;
+    self.starlinkCushionAb = NO;
 #endif
     self.uniqueId = settings.uniqueId;
     

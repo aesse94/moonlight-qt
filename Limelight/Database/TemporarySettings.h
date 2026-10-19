@@ -36,6 +36,7 @@
 @property (nonatomic) BOOL statsOverlay;
 @property (nonatomic) BOOL starlinkNack;
 @property (nonatomic) BOOL starlinkCushion;
+@property (nonatomic) BOOL starlinkCushionAb;
 
 - (id) initFromSettings:(Settings*)settings;
 

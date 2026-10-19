@@ -50,6 +50,8 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     // FrogtaleTV handoff cushion
     int cushionFrames;
     int cushionTarget;
+    BOOL cushionAb;
+    BOOL windowArm;
     int quietWindows;
     BOOL windowActive;
     int windowTarget;
@@ -103,7 +105,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     }
 }
 
-- (id)initWithView:(StreamView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing starlinkCushion:(BOOL)starlinkCushion
+- (id)initWithView:(StreamView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing starlinkCushion:(BOOL)starlinkCushion starlinkCushionAb:(BOOL)starlinkCushionAb
 {
     self = [super init];
 
@@ -115,6 +117,7 @@ extern int ff_isom_write_av1c(AVIOContext *pb, const uint8_t *buf, int size,
     // The cushion banks frames in the pacing queue, so it does nothing without frame pacing
     cushionFrames = (useFramePacing && starlinkCushion) ? CUSHION_MIN_FRAMES : 0;
     cushionTarget = cushionFrames;
+    cushionAb = starlinkCushionAb;
 
     parameterSetBuffers = [[NSMutableArray alloc] init];
     
@@ -168,6 +171,8 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
     BOOL inWindow = untilMs <= 650 || sinceMs <= 1000;
     if (inWindow && !windowActive) {
         windowActive = YES;
+        // A/B test: the cushion only runs in odd UTC minutes; even ones are measured without it
+        windowArm = !cushionAb || (wall / 60000) % 2 == 1;
         windowTarget = cushionTarget;
         windowMaxGapMs = 0;
         windowMaxQueue = 0;
@@ -176,22 +181,24 @@ int DrSubmitDecodeUnit(PDECODE_UNIT decodeUnit);
     }
     else if (!inWindow && windowActive) {
         windowActive = NO;
-        Log(LOG_I, @"FrogtaleTV cushion: maxgap=%d ms maxqueue=%d banked=%d stretched=%d phase=%d target=%d",
-            windowMaxGapMs, windowMaxQueue, windowSkips, windowStretches, phase, windowTarget);
+        Log(LOG_I, @"FrogtaleTV cushion: %@ maxgap=%d ms maxqueue=%d banked=%d stretched=%d phase=%d target=%d",
+            windowArm ? @"on" : @"off", windowMaxGapMs, windowMaxQueue, windowSkips, windowStretches, phase, windowTarget);
 
         // After a handoff whose stall outlasted the cushion (a visible freeze of 60 ms+), bank
         // 2 more frames next time; after 4 smooth handoffs in a row, one fewer
-        if (windowMaxGapMs >= 60) {
-            cushionTarget = MIN(CUSHION_MAX_FRAMES, cushionTarget + 2);
-            quietWindows = 0;
-        }
-        else if (++quietWindows >= 4) {
-            cushionTarget = MAX(cushionFrames, cushionTarget - 1);
-            quietWindows = 0;
+        if (windowArm) {
+            if (windowMaxGapMs >= 60) {
+                cushionTarget = MIN(CUSHION_MAX_FRAMES, cushionTarget + 2);
+                quietWindows = 0;
+            }
+            else if (++quietWindows >= 4) {
+                cushionTarget = MAX(cushionFrames, cushionTarget - 1);
+                quietWindows = 0;
+            }
         }
     }
 
-    if (!windowActive) {
+    if (!windowActive || !windowArm) {
         return 0;
     }
     if (untilMs <= (windowTarget > 5 ? 550 : 350)) {

@@ -14,7 +14,7 @@
 
 @interface VideoDecoderRenderer : NSObject
 
-- (id)initWithView:(UIView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing starlinkCushion:(BOOL)starlinkCushion;
+- (id)initWithView:(UIView*)view callbacks:(id<ConnectionCallbacks>)callbacks streamAspectRatio:(float)aspectRatio useFramePacing:(BOOL)useFramePacing starlinkCushion:(BOOL)starlinkCushion starlinkCushionAb:(BOOL)starlinkCushionAb;
 
 - (void)setupWithVideoFormat:(int)videoFormat width:(int)videoWidth height:(int)videoHeight frameRate:(int)frameRate;
 - (void)start;
