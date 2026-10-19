@@ -43,9 +43,10 @@ starts over once it passes 4 MB.
 You need a Mac with Xcode and an Apple ID. A free Apple ID works, but apps it signs expire after 7 days
 (just run it from Xcode again). A paid Apple Developer account makes them last a year.
 
-1. Clone it with its submodules:
+1. Clone it with its submodules (for now it lives on the `appletv-starlink` branch of the moonlight-qt
+   fork; it's the moonlight-ios codebase, not Qt):
    ```
-   git clone --recursive -b frogtale-starlink https://github.com/aesse94/moonlight-ios.git
+   git clone --recursive -b appletv-starlink https://github.com/aesse94/moonlight-qt.git moonlight-appletv
    ```
 2. Open `Moonlight.xcodeproj`. If Xcode asks, download the tvOS platform (Xcode → Settings → Components).
 3. Choose the **Moonlight TV** scheme. In the project's **Moonlight TV** target → Signing & Capabilities,
