@@ -8,6 +8,29 @@
 
 #import "AppDelegate.h"
 
+#if TARGET_OS_TV
+// Moonlight Starlink: tvOS 27 kills apps built with its SDK that don't adopt the UIScene lifecycle
+// (UIApplicationEvaluateRuntimeIssueForNoSceneLifecycleAdoption -> SIGTRAP at launch, 2026-10-20).
+// Info.plist now declares a scene with the Main storyboard; UIKit builds the window and gives it to
+// this delegate, which hands it to AppDelegate.window for the code that still reads it there.
+@interface SceneDelegate : UIResponder <UIWindowSceneDelegate>
+@property (strong, nonatomic) UIWindow *window;
+@end
+
+@implementation SceneDelegate
+
+- (void)scene:(UIScene *)scene willConnectToSession:(UISceneSession *)session options:(UISceneConnectionOptions *)connectionOptions {
+    AppDelegate* app = (AppDelegate*)[UIApplication sharedApplication].delegate;
+    app.window = self.window;
+}
+
+- (void)sceneDidEnterBackground:(UIScene *)scene {
+    [(AppDelegate*)[UIApplication sharedApplication].delegate saveContext];
+}
+
+@end
+#endif
+
 @implementation AppDelegate
 
 @synthesize managedObjectContext = _managedObjectContext;
@@ -21,6 +44,7 @@ static NSString* DB_NAME = @"Moonlight_tvOS.bin";
 #else
 static NSString* DB_NAME = @"Limelight_iOS.sqlite";
 #endif
+
 
 - (BOOL)application:(UIApplication *)application didFinishLaunchingWithOptions:(NSDictionary *)launchOptions {
 #if !TARGET_OS_TV
