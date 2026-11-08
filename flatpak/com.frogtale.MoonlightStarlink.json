@@ -102,6 +102,7 @@
             "builddir": true,
             "build-options": {
                 "config-opts": [
+                    "-DCMAKE_INSTALL_LIBDIR=lib",
                     "-DSDL2TTF_VENDORED=ON",
                     "-DSDL2TTF_SAMPLES=OFF"
                 ]
