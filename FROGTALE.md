@@ -48,3 +48,8 @@ Use `org.flatpak.Builder`, not Ubuntu's `flatpak-builder` 1.4.2. The older one i
 modules into `/app/lib64`, and qmake then can't find SDL2_ttf.
 
 Moonlight is GPL-3.0, and so is everything here.
+
+## 2026-11-08: the cushion stays off on LAN and wired links
+common-c now reports no handoff phase while the round trip is under 15 ms, so the pacer's handoff
+cushion (`FrogtaleTV cushion` lines) never runs at home or on cable/fibre. `FROGTALE_CUSHION=0`
+still forces it off everywhere.
